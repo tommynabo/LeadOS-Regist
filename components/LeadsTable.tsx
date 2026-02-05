@@ -8,15 +8,15 @@ interface LeadsTableProps {
 }
 
 const exportToCSV = (leads: Lead[]) => {
-  const headers = ['Empresa', 'Email', 'Teléfono', 'Web', 'Decisor', 'Cargo', 'LinkedIn', 'Ubicación', 'Estado', 'Resumen IA'];
+  const headers = ['Empresa', 'Email', 'Teléfono', 'Web', 'Decisor', 'Cargo', 'LinkedIn', 'Ubicación', 'Estado', 'Resumen', 'ANÁLISIS'];
   const escapeCSV = (value: string | undefined) => {
     if (!value) return '';
-    const escaped = value.replace(/"/g, '""');
-    return escaped.includes(',') || escaped.includes('"') || escaped.includes('\n') 
-      ? `"${escaped}"` 
+    const escaped = value.replace(/"/g, '""').replace(/\n/g, ' ');
+    return escaped.includes(',') || escaped.includes('"') || escaped.includes('\n')
+      ? `"${escaped}"`
       : escaped;
   };
-  
+
   const rows = leads.map(l => [
     escapeCSV(l.companyName),
     escapeCSV(l.decisionMaker?.email),
@@ -27,15 +27,16 @@ const exportToCSV = (leads: Lead[]) => {
     escapeCSV(l.decisionMaker?.linkedin),
     escapeCSV(l.location),
     escapeCSV(l.status),
-    escapeCSV(l.aiAnalysis?.summary)
+    escapeCSV(l.aiAnalysis?.summary),
+    escapeCSV(l.aiAnalysis?.fullAnalysis || l.aiAnalysis?.summary)
   ].join(','));
-  
+
   const csvContent = [headers.join(','), ...rows].join('\n');
   const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `leads_${new Date().toISOString().slice(0,10)}.csv`;
+  link.download = `leads_${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -53,7 +54,7 @@ export function LeadsTable({ leads, onViewMessage }: LeadsTableProps) {
           <span className="bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">{leads.length}</span>
         </h3>
         <div className="flex gap-2">
-          <button 
+          <button
             onClick={() => exportToCSV(leads)}
             className="px-3 py-1.5 text-xs font-medium border border-border rounded-md hover:bg-secondary transition-colors"
           >
@@ -61,7 +62,7 @@ export function LeadsTable({ leads, onViewMessage }: LeadsTableProps) {
           </button>
         </div>
       </div>
-      
+
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
@@ -106,26 +107,26 @@ export function LeadsTable({ leads, onViewMessage }: LeadsTableProps) {
                   )}
                 </td>
                 <td className="px-6 py-4 align-top">
-                   <div className="space-y-1">
-                      {lead.decisionMaker?.email && (
-                        <div className="flex items-center gap-1.5 text-xs">
-                          <Mail className="w-3 h-3 text-muted-foreground" />
-                          <span className="text-foreground">{lead.decisionMaker.email}</span>
-                        </div>
-                      )}
-                      {lead.decisionMaker?.phone && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="w-3 h-3 flex items-center justify-center font-bold">#</span>
-                          <span>{lead.decisionMaker.phone}</span>
-                        </div>
-                      )}
-                   </div>
+                  <div className="space-y-1">
+                    {lead.decisionMaker?.email && (
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <Mail className="w-3 h-3 text-muted-foreground" />
+                        <span className="text-foreground">{lead.decisionMaker.email}</span>
+                      </div>
+                    )}
+                    {lead.decisionMaker?.phone && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className="w-3 h-3 flex items-center justify-center font-bold">#</span>
+                        <span>{lead.decisionMaker.phone}</span>
+                      </div>
+                    )}
+                  </div>
                 </td>
                 <td className="px-6 py-4 align-top">
                   <div className="bg-secondary/40 p-4 rounded-lg border border-border/50 shadow-sm relative overflow-hidden">
-                     {/* Subtle gradient accent */}
-                     <div className="absolute top-0 left-0 w-1 h-full bg-primary/20" />
-                     
+                    {/* Subtle gradient accent */}
+                    <div className="absolute top-0 left-0 w-1 h-full bg-primary/20" />
+
                     <div className="flex items-start gap-2 mb-2">
                       <Sparkles className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />
                       <span className="text-xs font-bold text-foreground uppercase tracking-wide">Insight Clave</span>
@@ -136,7 +137,7 @@ export function LeadsTable({ leads, onViewMessage }: LeadsTableProps) {
                   </div>
                 </td>
                 <td className="px-6 py-4 align-top text-right">
-                  <button 
+                  <button
                     onClick={() => onViewMessage(lead)}
                     className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground border border-primary/20 rounded-md text-xs font-bold transition-all"
                   >
@@ -163,11 +164,11 @@ function StatusBadge({ status }: { status: Lead['status'] }) {
   };
 
   const statusMap: Record<string, string> = {
-      scraped: 'Extraído',
-      enriched: 'Enriquecido',
-      ready: 'Listo',
-      contacted: 'Contactado',
-      replied: 'Respuesta'
+    scraped: 'Extraído',
+    enriched: 'Enriquecido',
+    ready: 'Listo',
+    contacted: 'Contactado',
+    replied: 'Respuesta'
   };
 
   const icons = {

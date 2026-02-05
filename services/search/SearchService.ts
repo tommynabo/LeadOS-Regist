@@ -4,18 +4,152 @@ export type LogCallback = (message: string) => void;
 export type ResultCallback = (leads: Lead[]) => void;
 
 // Apify Actor IDs
-const GOOGLE_MAPS_SCRAPER = 'nwua9Gu5YrADL7ZDj'; // Google Maps Scraper with Emails
-const CONTACT_SCRAPER = 'vdrmO1lXCkhbPjE9j'; // Contact Info Scraper
+const GOOGLE_MAPS_SCRAPER = 'nwua9Gu5YrADL7ZDj';
+const CONTACT_SCRAPER = 'vdrmO1lXCkhbPjE9j';
 const DECISION_MAKER_FINDER = 'curious_coder/decision-maker-email-extractor';
-const LINKEDIN_SEARCH = 'curious_coder/linkedin-search-scraper'; // LinkedIn Search
-const LINKEDIN_PROFILE = 'dev_starter/linkedin-people-profile-scraper-rapid-2024'; // LinkedIn Profile Scraper (no cookie)
+const LINKEDIN_SEARCH = 'curious_coder/linkedin-search-scraper';
+const LINKEDIN_PROFILE = 'dev_starter/linkedin-people-profile-scraper-rapid-2024';
 
 export class SearchService {
     private isRunning = false;
     private apiKey: string = '';
+    private openaiKey: string = '';
 
     public stop() {
         this.isRunning = false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SMART QUERY INTERPRETER - Uses AI to optimize search terms
+    // ═══════════════════════════════════════════════════════════════════════════
+    private async interpretQuery(userQuery: string, platform: 'gmail' | 'linkedin'): Promise<{
+        searchQuery: string;
+        industry: string;
+        targetRoles: string[];
+        location: string;
+    }> {
+        if (!this.openaiKey) {
+            // Fallback sin AI
+            return {
+                searchQuery: userQuery,
+                industry: userQuery,
+                targetRoles: ['CEO', 'Fundador', 'Propietario', 'Director General'],
+                location: 'España'
+            };
+        }
+
+        try {
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.openaiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: `Eres un experto en prospección B2B. El usuario quiere encontrar leads de negocios.
+Tu trabajo es interpretar su búsqueda y generar los mejores términos para encontrar DUEÑOS y DECISORES de empresas.
+
+Responde SOLO con JSON válido en este formato exacto:
+{
+  "searchQuery": "término optimizado para buscar en ${platform === 'linkedin' ? 'LinkedIn' : 'Google Maps'}",
+  "industry": "sector/industria detectada",
+  "targetRoles": ["array de cargos a buscar en español e inglés"],
+  "location": "ubicación geográfica o España por defecto"
+}`
+                        },
+                        {
+                            role: 'user',
+                            content: `Interpreta esta búsqueda para encontrar leads: "${userQuery}"`
+                        }
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 200
+                })
+            });
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content || '';
+
+            // Parse JSON response
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                return JSON.parse(jsonMatch[0]);
+            }
+        } catch (e) {
+            console.error('Error interpreting query:', e);
+        }
+
+        // Fallback
+        return {
+            searchQuery: userQuery,
+            industry: userQuery,
+            targetRoles: ['CEO', 'Founder', 'Owner', 'Propietario', 'Director'],
+            location: 'España'
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AI LEAD ANALYSIS - Generates comprehensive research for each lead
+    // ═══════════════════════════════════════════════════════════════════════════
+    private async generateLeadAnalysis(lead: Lead): Promise<string> {
+        if (!this.openaiKey) {
+            return `${lead.companyName}: ${lead.aiAnalysis?.summary || 'Sin análisis disponible'}`;
+        }
+
+        try {
+            const context = `
+Empresa: ${lead.companyName}
+Ubicación: ${lead.location || 'No especificada'}
+Web: ${lead.website || 'No disponible'}
+Decisor: ${lead.decisionMaker?.name || 'No identificado'} - ${lead.decisionMaker?.role || 'Cargo desconocido'}
+LinkedIn: ${lead.decisionMaker?.linkedin || 'No disponible'}
+Email: ${lead.decisionMaker?.email || 'No disponible'}
+Teléfono: ${lead.decisionMaker?.phone || 'No disponible'}
+Resumen previo: ${lead.aiAnalysis?.summary || ''}
+            `.trim();
+
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.openaiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: `Eres un analista de prospección B2B experto. Genera un ANÁLISIS COMPLETO del lead para ventas.
+
+El análisis debe incluir:
+1. RESUMEN: Quién es esta empresa/persona en 2 frases
+2. OPORTUNIDAD: Por qué podría ser un buen cliente potencial
+3. PAIN POINTS: 2-3 problemas que probablemente tenga este tipo de negocio
+4. CUELLO DE BOTELLA: El principal obstáculo que enfrenta
+5. ÁNGULO DE ENTRADA: Cómo iniciar la conversación
+
+Sé conciso pero completo. Máximo 150 palabras total.`
+                        },
+                        {
+                            role: 'user',
+                            content: `Analiza este lead:\n${context}`
+                        }
+                    ],
+                    temperature: 0.5,
+                    max_tokens: 300
+                })
+            });
+
+            const data = await response.json();
+            return data.choices?.[0]?.message?.content || lead.aiAnalysis?.summary || '';
+        } catch (e) {
+            console.error('Error generating analysis:', e);
+            return lead.aiAnalysis?.summary || '';
+        }
     }
 
     private async callApifyActor(actorId: string, input: any, onLog: LogCallback): Promise<any[]> {
@@ -38,10 +172,9 @@ export class SearchService {
 
         onLog(`[APIFY] Actor iniciado (Run: ${runId})`);
 
-        // Poll for completion
         let isFinished = false;
         let pollCount = 0;
-        while (!isFinished && this.isRunning && pollCount < 60) { // Max 5 min
+        while (!isFinished && this.isRunning && pollCount < 60) {
             await new Promise(r => setTimeout(r, 5000));
             pollCount++;
 
@@ -50,7 +183,7 @@ export class SearchService {
             const statusData = await statusRes.json();
             const status = statusData.data.status;
 
-            if (pollCount % 3 === 0) { // Log every 15s
+            if (pollCount % 3 === 0) {
                 onLog(`[APIFY] Estado: ${status}`);
             }
 
@@ -63,7 +196,6 @@ export class SearchService {
 
         if (!this.isRunning) return [];
 
-        // Fetch results
         const itemsUrl = `https://api.apify.com/v2/datasets/${defaultDatasetId}/items?token=${this.apiKey}`;
         const itemsRes = await fetch(itemsUrl);
         return await itemsRes.json();
@@ -78,15 +210,22 @@ export class SearchService {
 
         try {
             this.apiKey = import.meta.env.VITE_APIFY_API_TOKEN || import.meta.env.VITE_APIFY_API_KEY || '';
+            this.openaiKey = import.meta.env.VITE_OPENAI_API_KEY || '';
 
             if (!this.apiKey) {
                 throw new Error("Falta la API Key de Apify. Configura VITE_APIFY_API_TOKEN en tu .env");
             }
 
+            // Step 1: Smart query interpretation
+            onLog(`[IA] 🧠 Interpretando búsqueda: "${config.query}"...`);
+            const interpreted = await this.interpretQuery(config.query, config.source);
+            onLog(`[IA] ✅ Industria: ${interpreted.industry}`);
+            onLog(`[IA] ✅ Roles objetivo: ${interpreted.targetRoles.join(', ')}`);
+
             if (config.source === 'linkedin') {
-                await this.searchLinkedIn(config, onLog, onComplete);
+                await this.searchLinkedIn(config, interpreted, onLog, onComplete);
             } else {
-                await this.searchGmail(config, onLog, onComplete);
+                await this.searchGmail(config, interpreted, onLog, onComplete);
             }
 
         } catch (error: any) {
@@ -99,18 +238,17 @@ export class SearchService {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // GMAIL SEARCH (Google Maps + Email Enrichment)
+    // GMAIL SEARCH
     // ═══════════════════════════════════════════════════════════════════════════
     private async searchGmail(
         config: SearchConfigState,
+        interpreted: { searchQuery: string; industry: string; targetRoles: string[]; location: string },
         onLog: LogCallback,
         onComplete: ResultCallback
     ) {
-        const leads: Lead[] = [];
-        const query = `${config.query} en España`;
-        onLog(`[GMAIL] 🗺️ Buscando en Google Maps: "${query}"`);
+        const query = `${interpreted.searchQuery} ${interpreted.location}`;
+        onLog(`[GMAIL] 🗺️ Buscando: "${query}"`);
 
-        // Stage 1: Google Maps Scraper
         const mapsInput = {
             searchStringsArray: [query],
             maxCrawledPlacesPerSearch: config.maxResults || 20,
@@ -126,7 +264,6 @@ export class SearchService {
 
         if (!this.isRunning) return;
 
-        // Process results
         const basicLeads: Lead[] = mapsResults.map((item: any, index: number) => ({
             id: String(item.placeId || `lead-${Date.now()}-${index}`),
             source: 'gmail' as const,
@@ -143,25 +280,24 @@ export class SearchService {
                 instagram: item.instagram || '',
             },
             aiAnalysis: {
-                summary: `${item.categoryName || 'Empresa'} con ${item.reviewsCount || 0} reseñas (${item.totalScore || 'N/A'}⭐)`,
+                summary: `${item.categoryName || interpreted.industry} con ${item.reviewsCount || 0} reseñas (${item.totalScore || 'N/A'}⭐)`,
                 painPoints: [],
                 generatedIcebreaker: '',
-                fullMessage: ''
+                fullMessage: '',
+                fullAnalysis: ''
             },
             status: item.email ? 'enriched' : 'scraped'
         }));
 
-        // Stage 2: Enrich leads without email
+        // Enrich leads without email
         const leadsWithoutEmail = basicLeads.filter(l => !l.decisionMaker?.email && l.website);
 
         if (leadsWithoutEmail.length > 0 && this.isRunning) {
-            onLog(`[GMAIL] 🔍 Enriqueciendo ${leadsWithoutEmail.length} leads sin email...`);
-
-            const websiteUrls = leadsWithoutEmail.map(l => `https://${l.website}`).slice(0, 10);
+            onLog(`[GMAIL] 🔍 Enriqueciendo ${leadsWithoutEmail.length} leads...`);
 
             try {
                 const contactResults = await this.callApifyActor(CONTACT_SCRAPER, {
-                    startUrls: websiteUrls.map(url => ({ url })),
+                    startUrls: leadsWithoutEmail.slice(0, 10).map(l => ({ url: `https://${l.website}` })),
                     maxRequestsPerWebsite: 3,
                     sameDomainOnly: true,
                 }, onLog);
@@ -172,90 +308,60 @@ export class SearchService {
                         l.website && domain.includes(l.website.replace('www.', ''))
                     );
 
-                    if (matchingLead && matchingLead.decisionMaker) {
+                    if (matchingLead?.decisionMaker) {
                         if (contact.emails?.length > 0) {
                             matchingLead.decisionMaker.email = contact.emails[0];
                             matchingLead.status = 'enriched';
                         }
-                        if (contact.phones?.length > 0 && !matchingLead.decisionMaker.phone) {
-                            matchingLead.decisionMaker.phone = contact.phones[0];
-                        }
+                        if (contact.phones?.length > 0) matchingLead.decisionMaker.phone = contact.phones[0];
                         if (contact.linkedIn) matchingLead.decisionMaker.linkedin = contact.linkedIn;
-                        if (contact.facebook) matchingLead.decisionMaker.facebook = contact.facebook;
-                        if (contact.instagram) matchingLead.decisionMaker.instagram = contact.instagram;
                     }
                 }
-                onLog(`[GMAIL] ✅ Enriquecimiento completado`);
             } catch (e: any) {
                 onLog(`[GMAIL] ⚠️ Error enriqueciendo: ${e.message}`);
             }
         }
 
-        // Stage 3: Decision Maker finder for top leads
-        const topLeads = basicLeads.filter(l => l.decisionMaker?.email && l.website).slice(0, 5);
+        // Generate AI analysis for top leads
+        if (this.openaiKey && this.isRunning) {
+            onLog(`[IA] 📊 Generando análisis completo de leads...`);
+            const topLeads = basicLeads.slice(0, 10);
 
-        if (topLeads.length > 0 && this.isRunning) {
-            onLog(`[GMAIL] 👤 Buscando decisores para ${topLeads.length} empresas top...`);
-
-            try {
-                const dmResults = await this.callApifyActor(DECISION_MAKER_FINDER, {
-                    urls: topLeads.map(l => `https://${l.website}`),
-                    maxPagesPerDomain: 5,
-                }, onLog);
-
-                for (const dm of dmResults) {
-                    const domain = dm.domain || dm.url || '';
-                    const matchingLead = basicLeads.find(l =>
-                        l.website && domain.includes(l.website.replace('www.', ''))
-                    );
-
-                    if (matchingLead?.decisionMaker && dm.decisionMakers?.length > 0) {
-                        const topDM = dm.decisionMakers[0];
-                        matchingLead.decisionMaker.name = topDM.name || '';
-                        matchingLead.decisionMaker.role = topDM.title || topDM.position || 'Propietario';
-                        if (topDM.email) matchingLead.decisionMaker.email = topDM.email;
-                        if (topDM.linkedin) matchingLead.decisionMaker.linkedin = topDM.linkedin;
-                        matchingLead.status = 'ready';
-                    }
-                }
-                onLog(`[GMAIL] ✅ Decisores identificados`);
-            } catch (e: any) {
-                onLog(`[GMAIL] ⚠️ Error buscando decisores: ${e.message}`);
+            for (let i = 0; i < topLeads.length && this.isRunning; i++) {
+                const lead = topLeads[i];
+                lead.aiAnalysis.fullAnalysis = await this.generateLeadAnalysis(lead);
+                if (i % 3 === 0) onLog(`[IA] Analizando ${i + 1}/${topLeads.length}...`);
             }
         }
 
-        // Final stats
         const enrichedCount = basicLeads.filter(l => l.decisionMaker?.email).length;
-        const readyCount = basicLeads.filter(l => l.status === 'ready').length;
-
-        onLog(`[GMAIL] 🎯 COMPLETADO: ${basicLeads.length} leads`);
-        onLog(`   • ${enrichedCount} con email`);
-        onLog(`   • ${readyCount} con decisor identificado`);
+        onLog(`[GMAIL] 🎯 COMPLETADO: ${basicLeads.length} leads (${enrichedCount} con email)`);
 
         onComplete(basicLeads);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // LINKEDIN SEARCH (Business Owners/CEOs)
+    // LINKEDIN SEARCH - Optimizado para encontrar dueños
     // ═══════════════════════════════════════════════════════════════════════════
     private async searchLinkedIn(
         config: SearchConfigState,
+        interpreted: { searchQuery: string; industry: string; targetRoles: string[]; location: string },
         onLog: LogCallback,
         onComplete: ResultCallback
     ) {
-        onLog(`[LINKEDIN] 💼 Buscando dueños/CEOs de PYMEs: "${config.query}"`);
+        // Build smart search query for business owners
+        const roleTerms = interpreted.targetRoles.slice(0, 3).join(' OR ');
+        const searchQuery = `(${roleTerms}) ${interpreted.industry} ${interpreted.location}`;
 
-        // Build search query for business owners in Spain
-        const searchQuery = `${config.query} CEO founder propietario dueño owner Spain España`;
-
-        const searchInput = {
-            searchTerms: [searchQuery],
-            maxItems: config.maxResults || 20,
-            searchType: 'people',
-            filterByCountry: 'Spain',
-        };
+        onLog(`[LINKEDIN] 💼 Buscando: "${searchQuery}"`);
 
         try {
+            const searchInput = {
+                searchTerms: [searchQuery],
+                maxItems: config.maxResults || 20,
+                searchType: 'people',
+            };
+
             const searchResults = await this.callApifyActor(LINKEDIN_SEARCH, searchInput, onLog);
             onLog(`[LINKEDIN] ✅ ${searchResults.length} perfiles encontrados`);
 
@@ -264,54 +370,56 @@ export class SearchService {
                 return;
             }
 
-            // Process LinkedIn results into leads
+            // Process results
             const leads: Lead[] = searchResults.map((profile: any, index: number) => {
-                // Extract company from current position
-                const company = profile.currentCompany || profile.companyName || 'Empresa no identificada';
-                const role = profile.headline || profile.title || 'Profesional';
+                const company = profile.currentCompany || profile.companyName || profile.company || 'Empresa no identificada';
+                const headline = profile.headline || profile.title || '';
+                const role = this.extractRole(headline);
 
                 return {
                     id: `linkedin-${Date.now()}-${index}`,
                     source: 'linkedin' as const,
                     companyName: company,
-                    website: profile.companyUrl?.replace(/^https?:\/\//, '').replace(/\/$/, '') || '',
-                    socialUrl: profile.profileUrl || profile.url,
-                    location: profile.location || 'España',
+                    website: '',
+                    socialUrl: profile.profileUrl || profile.url || profile.linkedInUrl,
+                    location: profile.location || interpreted.location,
                     decisionMaker: {
-                        name: profile.fullName || profile.name || '',
-                        role: this.extractRole(role),
+                        name: profile.fullName || profile.name || profile.firstName + ' ' + profile.lastName || '',
+                        role: role,
                         email: profile.email || '',
                         phone: profile.phone || '',
-                        linkedin: profile.profileUrl || profile.url || '',
+                        linkedin: profile.profileUrl || profile.url || profile.linkedInUrl || '',
                         facebook: '',
                         instagram: '',
                     },
                     aiAnalysis: {
-                        summary: `${role} en ${company}. ${profile.summary?.substring(0, 100) || ''}`,
+                        summary: `${role} en ${company}. ${headline.substring(0, 80)}`,
                         painPoints: [],
                         generatedIcebreaker: '',
-                        fullMessage: ''
+                        fullMessage: '',
+                        fullAnalysis: ''
                     },
-                    status: profile.email ? 'enriched' : 'scraped'
+                    status: 'scraped'
                 };
             });
 
-            // Stage 2: Try to get more profile details for top results
-            const profilesToEnrich = leads.slice(0, 10).filter(l => l.decisionMaker?.linkedin);
+            // Try to enrich profiles with more details
+            const profilesToEnrich = leads.filter(l => l.decisionMaker?.linkedin).slice(0, 10);
 
             if (profilesToEnrich.length > 0 && this.isRunning) {
                 onLog(`[LINKEDIN] 🔍 Obteniendo detalles de ${profilesToEnrich.length} perfiles...`);
 
                 try {
-                    const profileUrls = profilesToEnrich.map(l => l.decisionMaker!.linkedin);
-
                     const profileResults = await this.callApifyActor(LINKEDIN_PROFILE, {
-                        profileUrls: profileUrls,
+                        profileUrls: profilesToEnrich.map(l => l.decisionMaker!.linkedin),
                     }, onLog);
 
                     for (const profile of profileResults) {
+                        const profileUrl = profile.profileUrl || profile.url || profile.linkedInUrl || '';
                         const matchingLead = leads.find(l =>
-                            l.decisionMaker?.linkedin?.includes(profile.publicIdentifier || profile.profileUrl)
+                            l.decisionMaker?.linkedin &&
+                            (profileUrl.includes(l.decisionMaker.linkedin.split('/').pop() || 'xxx') ||
+                                l.decisionMaker.linkedin.includes(profileUrl.split('/').pop() || 'yyy'))
                         );
 
                         if (matchingLead?.decisionMaker) {
@@ -322,24 +430,38 @@ export class SearchService {
                             if (profile.phoneNumbers?.length > 0) {
                                 matchingLead.decisionMaker.phone = profile.phoneNumbers[0];
                             }
-                            // Update company website if found
-                            if (profile.currentCompanyWebsite) {
-                                matchingLead.website = profile.currentCompanyWebsite.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                            if (profile.company?.website || profile.currentCompanyWebsite) {
+                                matchingLead.website = (profile.company?.website || profile.currentCompanyWebsite || '')
+                                    .replace(/^https?:\/\//, '').replace(/\/$/, '');
+                            }
+                            // Update summary with more info
+                            if (profile.summary || profile.about) {
+                                matchingLead.aiAnalysis.summary = `${matchingLead.decisionMaker.role} en ${matchingLead.companyName}. ${(profile.summary || profile.about || '').substring(0, 100)}`;
                             }
                         }
                     }
-                    onLog(`[LINKEDIN] ✅ Detalles obtenidos`);
+                    onLog(`[LINKEDIN] ✅ Perfiles enriquecidos`);
                 } catch (e: any) {
-                    onLog(`[LINKEDIN] ⚠️ Error obteniendo detalles: ${e.message}`);
+                    onLog(`[LINKEDIN] ⚠️ Error: ${e.message}`);
                 }
             }
 
-            // Final stats
-            const withEmail = leads.filter(l => l.decisionMaker?.email).length;
+            // Generate AI analysis for each lead
+            if (this.openaiKey && this.isRunning) {
+                onLog(`[IA] 📊 Generando análisis completo de leads...`);
+
+                for (let i = 0; i < leads.length && this.isRunning; i++) {
+                    const lead = leads[i];
+                    lead.aiAnalysis.fullAnalysis = await this.generateLeadAnalysis(lead);
+                    if (i % 3 === 0) onLog(`[IA] Analizando ${i + 1}/${leads.length}...`);
+                }
+            }
+
             const withName = leads.filter(l => l.decisionMaker?.name).length;
+            const withEmail = leads.filter(l => l.decisionMaker?.email).length;
 
             onLog(`[LINKEDIN] 🎯 COMPLETADO: ${leads.length} leads`);
-            onLog(`   • ${withName} con nombre identificado`);
+            onLog(`   • ${withName} con nombre`);
             onLog(`   • ${withEmail} con email`);
 
             onComplete(leads);
@@ -351,16 +473,19 @@ export class SearchService {
     }
 
     private extractRole(headline: string): string {
-        const lowerHeadline = headline.toLowerCase();
+        const lower = headline.toLowerCase();
 
-        if (lowerHeadline.includes('ceo') || lowerHeadline.includes('chief executive')) return 'CEO';
-        if (lowerHeadline.includes('founder') || lowerHeadline.includes('fundador')) return 'Fundador';
-        if (lowerHeadline.includes('owner') || lowerHeadline.includes('propietario') || lowerHeadline.includes('dueño')) return 'Propietario';
-        if (lowerHeadline.includes('director') || lowerHeadline.includes('gerente')) return 'Director';
-        if (lowerHeadline.includes('manager')) return 'Manager';
-        if (lowerHeadline.includes('co-founder') || lowerHeadline.includes('cofundador')) return 'Co-Fundador';
+        if (lower.includes('ceo') || lower.includes('chief executive')) return 'CEO';
+        if (lower.includes('founder') || lower.includes('fundador')) return 'Fundador';
+        if (lower.includes('co-founder') || lower.includes('cofundador')) return 'Co-Fundador';
+        if (lower.includes('owner') || lower.includes('propietario') || lower.includes('dueño')) return 'Propietario';
+        if (lower.includes('director general') || lower.includes('managing director')) return 'Director General';
+        if (lower.includes('director')) return 'Director';
+        if (lower.includes('gerente') || lower.includes('manager')) return 'Gerente';
+        if (lower.includes('presidente')) return 'Presidente';
 
-        return headline.split('|')[0].split('at')[0].trim().substring(0, 40);
+        // Return first meaningful part of headline
+        return headline.split('|')[0].split(' at ')[0].split(' en ')[0].trim().substring(0, 35) || 'Profesional';
     }
 }
 
