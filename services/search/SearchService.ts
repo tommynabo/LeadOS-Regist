@@ -68,16 +68,72 @@ export class SearchService {
         }
     }
 
-    // Is this lead already in DB?
+    // Add new leads to the protection set AFTER saving them
+    public addToTabooSet(newLeads: Lead[]): void {
+        if (!Array.isArray(newLeads)) return;
+
+        let addedCount = 0;
+        newLeads.forEach((lead: Lead) => {
+            if (lead.website) {
+                const clean = this.cleanUrl(lead.website);
+                if (!this.tabooSet.has(clean)) {
+                    this.tabooSet.add(clean);
+                    addedCount++;
+                }
+            }
+            if (lead.companyName) {
+                const cleanName = lead.companyName.toLowerCase().trim();
+                if (!this.tabooSet.has(cleanName)) {
+                    this.tabooSet.add(cleanName);
+                    addedCount++;
+                }
+            }
+        });
+
+        if (addedCount > 0) {
+            console.log(`[Anti-Duplicate] Updated: +${addedCount} new entries. Total protected: ${this.tabooSet.size}`);
+        }
+    }
+
+    // Is this lead already in DB? (Comprehensive check)
     private isDuplicate(lead: Partial<Lead>): boolean {
+        // Check by website (primary)
         if (lead.website) {
             const clean = this.cleanUrl(lead.website);
-            if (this.tabooSet.has(clean)) return true;
+            if (this.tabooSet.has(clean)) {
+                console.debug(`[Anti-Dup] Blocked by website: ${clean}`);
+                return true;
+            }
         }
+        
+        // Check by company name (secondary)
         if (lead.companyName) {
             const cleanName = lead.companyName.toLowerCase().trim();
-            if (this.tabooSet.has(cleanName)) return true;
+            if (this.tabooSet.has(cleanName)) {
+                console.debug(`[Anti-Dup] Blocked by company: ${cleanName}`);
+                return true;
+            }
         }
+        
+        // Fuzzy check: partial matches (for similar variations)
+        if (lead.companyName) {
+            const nameVariations = [
+                lead.companyName.toLowerCase().trim(),
+                lead.companyName.toLowerCase().replace(/,.*/, '').trim(), // Remove location suffixes
+                lead.companyName.toLowerCase().replace(/["']/g, '').trim() // Remove quotes
+            ];
+            
+            for (const name of nameVariations) {
+                for (const taboo of this.tabooSet) {
+                    // Check if either contains the other (naive fuzzy match)
+                    if (name.length > 3 && taboo.includes(name) || name.includes(taboo)) {
+                        console.debug(`[Anti-Dup] Blocked by fuzzy match: ${name} vs ${taboo}`);
+                        return true;
+                    }
+                }
+            }
+        }
+        
         return false;
     }
 
@@ -410,6 +466,8 @@ IMPORTANTE: Responde SOLO con JSON válido.`
 
         // Convert to leads
         let allLeads: Lead[] = [];
+        let duplicatesByEmail = 0;
+        let duplicatesByWebsite = 0;
 
         for (const [index, item] of mapsResults.entries()) {
             const tempLead: Lead = {
@@ -442,16 +500,20 @@ IMPORTANTE: Responde SOLO con JSON válido.`
 
             // CHECK DUPLICATE
             if (this.isDuplicate(tempLead)) {
-                // Skip silently or log debug
+                // Count the reason for blocking
+                if (tempLead.website && this.tabooSet.has(this.cleanUrl(tempLead.website))) {
+                    duplicatesByWebsite++;
+                } else if (tempLead.companyName) {
+                    duplicatesByEmail++;
+                }
                 continue;
             }
 
             allLeads.push(tempLead);
         }
 
-        const discardedCount = mapsResults.length - allLeads.length;
-        if (discardedCount > 0) {
-            onLog(`[GMAIL] 🗑️ ${discardedCount} duplicados descartados por historial.`);
+        if (duplicatesByWebsite > 0 || duplicatesByEmail > 0) {
+            onLog(`[GMAIL] 🗑️ ${duplicatesByWebsite} por sitio web + ${duplicatesByEmail} por nombre = ${duplicatesByWebsite + duplicatesByEmail} descartados.`);
         }
 
         // STAGE 2: Aggressive Contact Enrichment
@@ -600,20 +662,23 @@ IMPORTANTE: Responde SOLO con JSON válido.`
 
             // Filter duplicates from LinkedIn results
             const uniqueProfiles = [];
+            let duplicateCounter = 0;
+            
             for (const profile of linkedInProfiles) {
-                // Check if this profile URL or extracted company is in taboo
-                // Ideally use URL as unique ID
-                const cleanUrl = this.cleanUrl(profile.url || '');
-                if (this.tabooSet.has(cleanUrl)) continue;
-
-                // Also check company name if possible
-                const company = this.extractCompany(profile.title);
-                if (company && this.tabooSet.has(company.toLowerCase().trim())) continue;
+                const tempLead = {
+                    website: profile.url,
+                    companyName: this.extractCompany(profile.title)
+                } as Partial<Lead>;
+                
+                if (this.isDuplicate(tempLead)) {
+                    duplicateCounter++;
+                    continue;
+                }
 
                 uniqueProfiles.push(profile);
             }
 
-            onLog(`[LINKEDIN] 📋 ${uniqueProfiles.length} perfiles nuevos detectados (${linkedInProfiles.length - uniqueProfiles.length} duplicados).`);
+            onLog(`[LINKEDIN] 📋 ${uniqueProfiles.length} perfiles nuevos detectados (${duplicateCounter} duplicados filtrados).`);
 
             if (!this.isRunning || uniqueProfiles.length === 0) {
                 onLog(`[LINKEDIN] ❌ No se encontraron perfiles. Intenta ampliar la zona.`);

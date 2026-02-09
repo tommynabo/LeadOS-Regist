@@ -204,7 +204,12 @@ function App() {
               status: 'new'
             });
             if (error) console.error('DB Error:', error);
-            else addLog('[DB] Resultados guardados en la nube de forma segura.');
+            else {
+              addLog('[DB] Resultados guardados en la nube de forma segura.');
+              // ANTI-DUPLICATE: Update protection set with new leads
+              searchService.addToTabooSet(results);
+              addLog('[🛡️] Protección actualizada: Los leads se añadieron al historial anti-duplicados.');
+            }
           } catch (err) {
             console.error('Failed to save results to DB', err);
           }
