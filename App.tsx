@@ -215,6 +215,12 @@ function App() {
     );
   };
 
+  const handleStop = () => {
+    searchService.stop();
+    setIsSearching(false);
+    addLog('[SYSTEM] 🛑 Búsqueda detenida por el usuario.');
+  };
+
   const handleConfigChange = (updates: Partial<SearchConfigState>) => {
     setConfig(prev => ({ ...prev, ...updates }));
   };
@@ -255,6 +261,7 @@ function App() {
               config={config}
               onChange={handleConfigChange}
               onSearch={handleSearch}
+              onStop={handleStop}
               isSearching={isSearching}
             />
 

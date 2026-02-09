@@ -7,6 +7,7 @@ interface SearchConfigProps {
   config: SearchConfigState;
   onChange: (updates: Partial<SearchConfigState>) => void;
   onSearch: () => void;
+  onStop: () => void;
   isSearching: boolean;
 }
 
@@ -25,7 +26,7 @@ const PLATFORM_DESCRIPTIONS: Record<PlatformSource, string> = {
   linkedin: 'Busca dueños/CEOs de PYMEs en LinkedIn'
 };
 
-export function SearchConfig({ config, onChange, onSearch, isSearching }: SearchConfigProps) {
+export function SearchConfig({ config, onChange, onSearch, onStop, isSearching }: SearchConfigProps) {
   return (
     <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
@@ -99,23 +100,24 @@ export function SearchConfig({ config, onChange, onSearch, isSearching }: Search
 
         {/* Action Button - 2 Cols */}
         <div className="md:col-span-2 flex flex-col justify-end">
-          <button
-            onClick={onSearch}
-            disabled={isSearching || !config.query}
-            className={`w-full h-[42px] flex items-center justify-center rounded-lg font-semibold text-sm transition-all shadow-lg shadow-primary/20 ${isSearching
-              ? 'bg-secondary text-muted-foreground cursor-not-allowed'
-              : 'bg-primary text-primary-foreground hover:brightness-110 active:scale-[0.98]'
-              }`}
-          >
-            {isSearching ? (
-              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5 mr-2 fill-current" />
-                Iniciar
-              </>
-            )}
-          </button>
+          {isSearching ? (
+            <button
+              onClick={onStop}
+              className="w-full h-[42px] flex items-center justify-center rounded-lg font-semibold text-sm transition-all shadow-lg shadow-red-500/20 bg-red-500 text-white hover:bg-red-600 active:scale-[0.98]"
+            >
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
+              Detener
+            </button>
+          ) : (
+            <button
+              onClick={onSearch}
+              disabled={!config.query}
+              className="w-full h-[42px] flex items-center justify-center rounded-lg font-semibold text-sm transition-all shadow-lg shadow-primary/20 bg-primary text-primary-foreground hover:brightness-110 active:scale-[0.98]"
+            >
+              <Play className="w-3.5 h-3.5 mr-2 fill-current" />
+              Iniciar
+            </button>
+          )}
         </div>
       </div>
 
