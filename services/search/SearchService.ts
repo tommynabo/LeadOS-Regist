@@ -1,9 +1,9 @@
 import { Lead, SearchConfigState } from '../../lib/types';
+import { supabase } from '../../lib/supabase';
 
 export type LogCallback = (message: string) => void;
 export type ResultCallback = (leads: Lead[]) => void;
 
-// Apify Actor IDs
 // Apify Actor IDs
 const GOOGLE_MAPS_SCRAPER = 'nwua9Gu5YrADL7ZDj';
 const CONTACT_SCRAPER = 'vdrmO1lXCkhbPjE9j';
@@ -13,9 +13,72 @@ export class SearchService {
     private isRunning = false;
     private apiKey: string = '';
     private openaiKey: string = '';
+    private tabooSet: Set<string> = new Set(); // Anti-Duplicate Memory
 
     public stop() {
         this.isRunning = false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ANTI-DUPLICATE LOGIC
+    // ═══════════════════════════════════════════════════════════════════════════
+    private cleanUrl(url: string): string {
+        return url.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/$/, '').toLowerCase();
+    }
+
+    private async fetchHistory(userId: string): Promise<void> {
+        if (!userId) return;
+
+        try {
+            // Fetch all past leads for this user that have a website
+            // We need to fetch from 'search_results' and extract 'lead_data'
+            // NOTE: This could be heavy if history is huge. In production, this should be an Edge Function or optimized SQL.
+            // For now, we fetch the last 1000 sessions to keep it performant-ish.
+            const { data, error } = await supabase
+                .from('search_results')
+                .select('lead_data')
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(500);
+
+            if (error) {
+                console.error('Error fetching history:', error);
+                return;
+            }
+
+            const historySet = new Set<string>();
+
+            if (data) {
+                data.forEach((row: any) => {
+                    const leads = row.lead_data;
+                    if (Array.isArray(leads)) {
+                        leads.forEach((lead: any) => {
+                            if (lead.website) historySet.add(this.cleanUrl(lead.website));
+                            if (lead.companyName) historySet.add(lead.companyName.toLowerCase().trim());
+                        });
+                    }
+                });
+            }
+
+            this.tabooSet = historySet;
+            console.log(`[Anti-Duplicate] Loaded ${this.tabooSet.size} protected entities.`);
+
+        } catch (e) {
+            console.error('Failed to load history for deduplication', e);
+        }
+    }
+
+    // Is this lead already in DB?
+    private isDuplicate(lead: Partial<Lead>): boolean {
+        if (lead.website) {
+            const clean = this.cleanUrl(lead.website);
+            if (this.tabooSet.has(clean)) return true;
+        }
+        if (lead.companyName) {
+            const cleanName = lead.companyName.toLowerCase().trim();
+            if (this.tabooSet.has(cleanName)) return true;
+        }
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -281,7 +344,7 @@ IMPORTANTE: Responde SOLO con JSON válido.`
         return await itemsRes.json();
     }
 
-    public async startSearch(config: SearchConfigState, onLog: LogCallback, onComplete: ResultCallback) {
+    public async startSearch(config: SearchConfigState, userId: string | null, onLog: LogCallback, onComplete: ResultCallback) {
         this.isRunning = true;
 
         try {
@@ -289,6 +352,15 @@ IMPORTANTE: Responde SOLO con JSON válido.`
             this.openaiKey = import.meta.env.VITE_OPENAI_API_KEY || '';
 
             if (!this.apiKey) throw new Error("Falta VITE_APIFY_API_TOKEN en .env");
+
+            // 0. PRE-FLIGHT: Load History
+            if (userId) {
+                onLog(`[SISTEMA] 🛡️ Cargando historial para evitar duplicados...`);
+                await this.fetchHistory(userId);
+                onLog(`[SISTEMA] ✅ Protección activa: ${this.tabooSet.size} leads ignorados.`);
+            } else {
+                this.tabooSet.clear();
+            }
 
             onLog(`[IA] 🧠 Interpretando: "${config.query}"...`);
             const interpreted = await this.interpretQuery(config.query, config.source);
@@ -334,36 +406,53 @@ IMPORTANTE: Responde SOLO con JSON válido.`
             maxReviews: 0,
         }, onLog);
 
-        onLog(`[GMAIL] 📊 ${mapsResults.length} empresas encontradas. Filtrando vacíos...`);
+        onLog(`[GMAIL] 📊 ${mapsResults.length} empresas encontradas. Filtrando duplicados...`);
 
         // Convert to leads
-        let allLeads: Lead[] = mapsResults.map((item: any, index: number) => ({
-            id: String(item.placeId || `lead-${Date.now()}-${index}`),
-            source: 'gmail' as const,
-            companyName: item.title || item.name || 'Sin Nombre',
-            website: item.website?.replace(/^https?:\/\//, '').replace(/\/$/, '') || '',
-            location: item.address || item.fullAddress || '',
-            decisionMaker: {
-                name: '',
-                role: 'Propietario',
-                email: item.email || (item.emails?.[0]) || '',
-                phone: item.phone || (item.phones?.[0]) || '',
-                linkedin: '',
-                facebook: item.facebook || '',
-                instagram: item.instagram || '',
-            },
-            aiAnalysis: {
-                summary: `${item.categoryName || interpreted.industry} - ${item.reviewsCount || 0} reseñas (${item.totalScore || 'N/A'}⭐)`,
-                painPoints: [],
-                generatedIcebreaker: '',
-                fullMessage: '',
-                fullAnalysis: '',
-                psychologicalProfile: '',
-                businessMoment: '',
-                salesAngle: ''
-            },
-            status: 'scraped' as const
-        }));
+        let allLeads: Lead[] = [];
+
+        for (const [index, item] of mapsResults.entries()) {
+            const tempLead: Lead = {
+                id: String(item.placeId || `lead-${Date.now()}-${index}`),
+                source: 'gmail' as const,
+                companyName: item.title || item.name || 'Sin Nombre',
+                website: item.website?.replace(/^https?:\/\//, '').replace(/\/$/, '') || '',
+                location: item.address || item.fullAddress || '',
+                decisionMaker: {
+                    name: '',
+                    role: 'Propietario',
+                    email: item.email || (item.emails?.[0]) || '',
+                    phone: item.phone || (item.phones?.[0]) || '',
+                    linkedin: '',
+                    facebook: item.facebook || '',
+                    instagram: item.instagram || '',
+                },
+                aiAnalysis: {
+                    summary: `${item.categoryName || interpreted.industry} - ${item.reviewsCount || 0} reseñas (${item.totalScore || 'N/A'}⭐)`,
+                    painPoints: [],
+                    generatedIcebreaker: '',
+                    fullMessage: '',
+                    fullAnalysis: '',
+                    psychologicalProfile: '',
+                    businessMoment: '',
+                    salesAngle: ''
+                },
+                status: 'scraped' as const
+            };
+
+            // CHECK DUPLICATE
+            if (this.isDuplicate(tempLead)) {
+                // Skip silently or log debug
+                continue;
+            }
+
+            allLeads.push(tempLead);
+        }
+
+        const discardedCount = mapsResults.length - allLeads.length;
+        if (discardedCount > 0) {
+            onLog(`[GMAIL] 🗑️ ${discardedCount} duplicados descartados por historial.`);
+        }
 
         // STAGE 2: Aggressive Contact Enrichment
         // We need to process leads that HAVE a website but NO email
@@ -508,16 +597,32 @@ IMPORTANTE: Responde SOLO con JSON válido.`
             }
 
             const linkedInProfiles = allResults.filter((r: any) => r.url?.includes('linkedin.com/in/'));
-            onLog(`[LINKEDIN] 📋 ${linkedInProfiles.length} perfiles detectados.`);
 
-            if (!this.isRunning || linkedInProfiles.length === 0) {
+            // Filter duplicates from LinkedIn results
+            const uniqueProfiles = [];
+            for (const profile of linkedInProfiles) {
+                // Check if this profile URL or extracted company is in taboo
+                // Ideally use URL as unique ID
+                const cleanUrl = this.cleanUrl(profile.url || '');
+                if (this.tabooSet.has(cleanUrl)) continue;
+
+                // Also check company name if possible
+                const company = this.extractCompany(profile.title);
+                if (company && this.tabooSet.has(company.toLowerCase().trim())) continue;
+
+                uniqueProfiles.push(profile);
+            }
+
+            onLog(`[LINKEDIN] 📋 ${uniqueProfiles.length} perfiles nuevos detectados (${linkedInProfiles.length - uniqueProfiles.length} duplicados).`);
+
+            if (!this.isRunning || uniqueProfiles.length === 0) {
                 onLog(`[LINKEDIN] ❌ No se encontraron perfiles. Intenta ampliar la zona.`);
                 onComplete([]);
                 return;
             }
 
             // STEP 2: Deep Analysis (Posts + Psych Profile)
-            const potentialLeads = linkedInProfiles.slice(0, (config.maxResults || 5)); // Process fewer for deep analysis speed
+            const potentialLeads = uniqueProfiles.slice(0, (config.maxResults || 5)); // Process fewer for deep analysis speed
             const finalLeads: Lead[] = [];
 
             // Actor for posts (from the JSON reference)

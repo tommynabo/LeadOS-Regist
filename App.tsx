@@ -22,7 +22,7 @@ function App() {
   // Search State
   const [config, setConfig] = useState<SearchConfigState>({
     query: '',
-    source: PROJECT_CONFIG.enabledPlatforms[0] || 'instagram',
+    source: PROJECT_CONFIG.enabledPlatforms[0] || 'gmail',
     mode: 'fast',
     maxResults: 10
   });
@@ -173,6 +173,7 @@ function App() {
 
     searchService.startSearch(
       config,
+      userId,
       // onLog
       (message) => addLog(message),
       // onComplete
