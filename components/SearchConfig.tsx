@@ -9,6 +9,7 @@ interface SearchConfigProps {
   onSearch: () => void;
   onStop: () => void;
   isSearching: boolean;
+  onOpenCriteria?: () => void;
 }
 
 const PLATFORM_ICONS: Record<PlatformSource, React.ReactNode> = {
@@ -26,7 +27,7 @@ const PLATFORM_DESCRIPTIONS: Record<PlatformSource, string> = {
   linkedin: 'Busca dueños/CEOs de PYMEs en LinkedIn'
 };
 
-export function SearchConfig({ config, onChange, onSearch, onStop, isSearching }: SearchConfigProps) {
+export function SearchConfig({ config, onChange, onSearch, onStop, isSearching, onOpenCriteria }: SearchConfigProps) {
   return (
     <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
@@ -99,7 +100,15 @@ export function SearchConfig({ config, onChange, onSearch, onStop, isSearching }
         </div>
 
         {/* Action Button - 2 Cols */}
-        <div className="md:col-span-2 flex flex-col justify-end">
+        <div className="md:col-span-2 flex flex-col justify-end gap-2">
+          <button
+            onClick={onOpenCriteria}
+            disabled={isSearching}
+            className="w-full h-[38px] flex items-center justify-center rounded-lg font-semibold text-xs transition-all shadow-md bg-slate-200/50 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300 dark:hover:bg-slate-800 disabled:opacity-50"
+          >
+            ✎ Criterio
+          </button>
+          
           {isSearching ? (
             <button
               onClick={onStop}
