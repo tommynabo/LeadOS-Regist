@@ -239,8 +239,12 @@ function App() {
     setIsCriteriaModalOpen(true);
   };
 
-  const handleSaveCriteria = (newQuery: string) => {
-    setConfig(prev => ({ ...prev, query: newQuery }));
+  const handleSaveCriteria = (newQuery: string, filters?: any) => {
+    setConfig(prev => ({ 
+      ...prev, 
+      query: newQuery,
+      advancedFilters: filters
+    }));
     setIsCriteriaModalOpen(false);
   };
 
